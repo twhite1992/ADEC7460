@@ -1,0 +1,776 @@
+---
+title: "Chapter 3 Exercises, Week 2"
+author: "Timothy White"
+date: "3/27/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, echo = TRUE)
+```
+
+```{r, library_invocation, echo = FALSE, include = FALSE}
+
+library("feasts")
+library("seasonal")
+library("tsibble")
+library("tsibbledata")
+library("dplyr")
+library("ggplot2")
+library("forecast")
+library("fable")
+library("fpp3")
+library("patchwork")
+library("sqldf")
+
+```
+
+**Unless otherwise noted, all R code can be found at the end**
+
+### Question 1
+
+A plot of GDP per capita by country is shown below (top plot). As is apparent, it is difficult to decipher patterns from the data with all countries included. In order to improve interpretability, a separate chart was created using the countries with the highest GDP per capita as of the most recent recording in the table (2017). 
+
+The country with the highest GDP per capita is Luxembourg, and that has been the case for at least 2 decades in the data. Some of the countries/regions in the chart have also demonstrated different patterns in terms of growth in GDP per capita. For example, and most strikingly, Macao SAR, China experienced a significant increase in GDP per capita from the early- to mid-2000's through the early-2010's. Less strongly, Norway has experienced growth rates in GDP per capita faster than other countries, putting it higher than Switzerland for several years recently.
+
+```{r, 1_GDP_per_capita, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 1
+gdp_per_capita <- 
+  global_economy %>%
+  mutate(GDP_per_capita = GDP/Population) %>%
+  select(Country,
+         Code,
+         Year,
+         Imports,
+         Exports,
+         Population,
+         GDP_per_capita)
+
+gdp_per_capita_narm <-
+  subset(gdp_per_capita, 
+         is.na(gdp_per_capita$GDP_per_capita) == FALSE)
+
+gdp_per_capita_narm %>%
+  ggplot(aes(x = Year,
+             y = GDP_per_capita)) +
+  geom_line(data = gdp_per_capita_narm,
+            aes(y = GDP_per_capita,
+                colour = Code)) +
+  theme(legend.position = "none") +
+  labs(x = "Year",
+       y = "GDP Per Capita",
+       title = "GDP Per Capita through Time",
+       subtitle = "All Countries")
+
+gdp_per_capita_sql <- data.frame(gdp_per_capita_narm)
+
+gdp_per_capita_top5 <- sqldf('
+         
+    WITH DATA_PREP AS (
+                             
+        SELECT Country
+        , Code
+        , Year
+        , Imports
+        , Exports
+        , Population
+        , GDP_per_capita
+        , RANK() OVER(PARTITION BY Year ORDER BY GDP_per_capita DESC) AS RankOrder
+        , MAX(YEAR) OVER() AS MaxYear
+        
+        FROM gdp_per_capita_sql
+        
+    )
+    
+    SELECT *
+    FROM DATA_PREP
+    WHERE Year = MaxYear
+    AND RankOrder <= 5
+                             
+')
+
+gdp_per_capita_top5 <-
+  gdp_per_capita_narm %>%
+  filter(Country %in% gdp_per_capita_top5$Country)
+
+gdp_per_capita_top5 %>%
+  ggplot(aes(x = Year,
+             y = GDP_per_capita)) +
+  geom_line(data = gdp_per_capita_top5,
+            aes(y = GDP_per_capita,
+                colour = Country)) + 
+  labs(x = "Year",
+       y = "GDP Per Capita",
+       title = "GDP Per Capita through Time",
+       subtitle = "Top 5 Countries (2017)")
+
+```
+
+### Question 2
+
+#### United States GDP
+
+United States GDP data is graphed below. The left plot includes graphs of total nominal (black) and real (red) GDP since 1960; the right plot shows nominal and real GDP per capita. Of note, real GDP values are expressed in 2000 USD.
+
+The transformation of the data was important because looking at nominal figures alone suggests a strong increase in overall wealth; transforming the numbers by accounting for inflation reduces the rate of increase and is more representative of the change in individual purchasing power. 
+
+```{r, 2_charts, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 2 - global_economy
+#USA GDP
+USA_economy <-
+  global_economy %>%
+  filter(Code == "USA") %>%
+  mutate(GDP_capita = GDP/Population) %>%
+  select(Country,
+         Code,
+         Year,
+         GDP,
+         CPI,
+         Population,
+         GDP_capita)
+
+USA_economy <-
+  USA_economy %>%
+  mutate(CPI_REF = USA_economy$CPI[USA_economy$Year == 2000]) %>%
+  mutate(Real_GDP = GDP*CPI_REF/CPI) %>%
+  mutate(Real_GDP_capita = Real_GDP/Population)
+
+ggp_USAgdp <- 
+  ggplot(data = USA_economy) +
+  geom_line(aes(x = Year,
+                y = GDP),
+            color = "black") +
+  geom_line(aes(x = Year,
+                y = Real_GDP),
+            color = "red") +
+  labs(x = "Year",
+       y = "GDP",
+       title = "Nominal and Real GDP",
+       subtitle = "United States")
+
+ggp_USAgdp_cap <- 
+  ggplot(data = USA_economy) +
+  geom_line(aes(x = Year,
+                y = GDP_capita),
+            color = "black") +
+  geom_line(aes(x = Year,
+                y = Real_GDP_capita),
+            color = "red") +
+  labs(x = "Year",
+       y = "GDP Per Capita",
+       title = "Nominal and Real GDP",
+       subtitle = "Per Capita, United States")
+  
+
+ggp_USAgdp + ggp_USAgdp_cap
+
+```
+
+#### Victorian Livestock Slaughter
+
+Plots of Victorian livestock (bulls, bullocks, and steers) slaughter are shown below. The left plot is simply a plot of total slaughters over time, while the right plot attempts to decompose the data. No transformation of the data was performed as it exhibits a somewhat sporadic pattern. While it's clear that the number of slaughters have been slightly decreasing, the overall rate of change does not appear to increase or decrease with time, aside from the earlier years.
+
+```{r, 2_charts_livestock, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 2 - aus_livestock
+#Victorian Livestock
+
+victoria_livestock <-
+  aus_livestock %>%
+    filter(Animal == "Bulls, bullocks and steers") %>%
+    filter(State == "Victoria")
+
+victoria_livestock %>%
+  autoplot(Count) +
+  labs(x = "Month",
+       y = "Count",
+       title = "Victoria Livestock Slaughter")
+
+victoria_dcmp <-
+  victoria_livestock %>%
+  model(x11 = X_13ARIMA_SEATS(Count~x11())) %>%
+  components()
+
+autoplot(victoria_dcmp) +
+  labs(x = "Month",
+       y = "Slaughter Impact",
+       title = "Victoria Livestock Slaughter - X11 Decomposition")
+
+```
+
+#### Victorian Electricity Demand
+
+Plots of Victorian electricity demand are below; the left shows total demand, and the right shows average daily demand. In both cases, the data remains sporadic with no significantly apparent trend. However, the plots do appear to exhibit a level of seasonality as judged by the consistent wave-shape.
+
+```{r, 2_vic_elec, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 2 - vic_elec
+vic_elec_summ <- vic_elec %>%
+  mutate(Demand = Demand/1000) %>%
+  index_by(Date = as.Date(Time)) %>%
+  filter(year(Date) > 2011 & year(Date) < 2015) %>%
+  summarize(Demand = sum(Demand),
+            Temperature = max(Temperature))
+
+vic_elec_summ_avg <- vic_elec %>%
+  mutate(Demand = Demand/1000) %>%
+  index_by(Date = as.Date(Time)) %>%
+  filter(year(Date) > 2011 & year(Date) < 2015) %>%
+  summarize(Demand = mean(Demand),
+            Temperature = max(Temperature))
+
+vic_elec_summ %>%
+  autoplot(Demand) +
+  labs(x = "Date",
+       y = "Demand",
+       title = "Daily Electricity Demand",
+       subtitle = "Total per day")
+
+vic_elec_summ_avg %>%
+  autoplot(Demand) +
+  labs(x = "Date",
+       y = "Demand",
+       title = "Daily Electricity Demand",
+       subtitle = "Average per day")
+
+```
+
+#### Australian Gas Production
+
+Below are plots of Australian gas production with the total production on the left and transformed production (lambda = 0.12) on the right. Transformation was appropriate in this case given the consistent increase in variability of gas production over time. A Box-Cox transformation yielded a lambda of 0.12.
+
+```{r, 2_aus_prod, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 2 - aus_production
+aus_production %>%
+  autoplot(Gas) +
+  labs(y = "Gas Production",
+       title = "Quarterly Gas Production")
+
+lambda_prod <- 
+  aus_production %>%
+  features(Gas, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+aus_production %>%
+  autoplot(box_cox(Gas, lambda_prod)) +
+  labs(y = paste("Gas Production - lambda = ", round(lambda_prod, 2)),
+       title = "Transformed Gas Production")
+
+```
+
+### Question 3
+
+A plot of Canadian gas volume over time is shown below. Transforming the data with a Box-Cox transformation would not be helpful because the variability in the data does not increase or decrease at a somewhat constant rate over time. As the plot shows, the variability in volume is highest between the mid-1970's and late-1980's at which point the variability returns to a more normal pattern. Box-Cox transformations are best used for data that displays variability that increases or decreases at a constant rate over time (see Question 2).
+
+```{r, 3_canadian_gas, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 3
+canadian_gas %>%
+  autoplot(Volume) +
+  labs(x = "Month",
+       title = "Monthly Gas Volume",
+       subtitle = "Canada")
+
+```
+
+### Question 4
+
+A lambda value of $-0.02$ was calculated as an appropriate Box-Cox transformation of the retail data. The code generating this value is shown below.
+
+```{r, 4_retaildata, fig.show = "hold", out.width = "50%", echo = TRUE}
+
+#QUESTION 4
+set.seed(12345678)
+myseries <- aus_retail %>%
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+
+myseries %>%
+  autoplot(Turnover) +
+  labs(x = "Month",
+       title = "Monthly Turnover - No Transformation")
+
+lambda_retail <- 
+  myseries %>%
+  features(Turnover, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+myseries %>%
+  autoplot(box_cox(Turnover, lambda_retail)) +
+  labs(y = paste("Turnover - lambda = ", round(lambda_retail, 2)),
+       title = "Monthly Turnover - Box-Cox Transformation",
+       subtitle = paste("Lambda = ", round(lambda_retail, 2)))
+
+print(round(lambda_retail, 2))
+
+```
+
+### Question 5
+
+#### Australian Tobacco Production
+
+Plots of Australian Tobacco production are shown below with total production on the left and transformed production (lambda = $0.93$) on the right. Given the lambda value close to $1$, it is clear that transformation of the data should not be a high priority as any model's interpretability will diminish with a lambda of $0.93$.
+
+```{r, 5_box_cox, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 5 - aus_production
+aus_production %>%
+  filter(is.na(aus_production$Tobacco)==FALSE) %>%
+  autoplot(Tobacco) +
+  labs(y = "Tobacco Production",
+       title = "Quarterly Tobacco Production")
+
+lambda_tobacco <- 
+  aus_production %>%
+  filter(is.na(aus_production$Tobacco)==FALSE) %>%
+  features(Tobacco, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+aus_production %>%
+  filter(is.na(aus_production$Tobacco)==FALSE) %>%
+  autoplot(box_cox(Tobacco, lambda_tobacco)) +
+  labs(y = paste("Tobacco Production - lambda = ", round(lambda_tobacco, 2)),
+       title = "Transformed Tobacco Production")
+
+```
+
+#### Economy Class, Melbourne to Sydney
+
+Plots of the number of passengers to fly economy class between Melbourne and Sydney are shown below with total values on the left and transformed values on the right (lambda = $2$). Overall, the transformation was largely unhelpful in increasing the useability of the data, largely driven by significant outliers associated with a strike. It would be prudent to first consider how to manage such outliers before attempting data transformation. 
+
+```{r, 5_ansett, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 5 - ansett
+ansett %>%
+  filter(Class=="Economy",
+         Airports=="MEL-SYD") %>%
+  autoplot(Passengers) +
+  labs(x = "Week",
+       y = "Passengers",
+       title = "Weekly Passengers",
+       subtitle = "Economy, MEL-SYD")
+
+lambda_ansett <-
+  ansett %>%
+  filter(Class=="Economy",
+         Airports=="MEL-SYD") %>%
+  features(Passengers, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+ansett %>%
+  filter(Class=="Economy",
+         Airports=="MEL-SYD") %>%
+  autoplot(box_cox(Passengers, lambda_ansett)) +
+  labs(y = paste("Passengers - lambda = ", round(lambda_ansett, 2)),
+       x = "Week",
+       title = paste("Weekly Passengers - lambda = ", round(lambda_ansett, 2)),
+       subtitle = "Economy, MEL-SYD")
+
+```
+
+#### Pedestrians, Southern Cross Station
+
+Plots of pedestrian counts from Southern Cross Station are shown below with total values on the left and transformed values on the right (lambda = $0.69$). Once again, transformation is somewhat questionable in this case as the data continues to exhibit similar patterns. However, given the closeness of lambda to a square-root transformation, it would be reasonable to explore the effects of transformation in further detail.
+
+```{r, 5_pedestrian, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 5 - Pedestrian
+pedestrian_SC <-
+  pedestrian %>%
+  filter(Sensor == "Southern Cross Station") %>%
+  index_by(Date = as.Date(Date_Time)) %>%
+  summarize(Count = sum(Count)) 
+
+pedestrian_SC %>%
+  autoplot(Count) +
+  labs(x = "Date",
+       y = "Pedestrian Count",
+       title = "Daily Pedestrians",
+       subtitle = "Southern Cross Station")
+
+lambda_ped <-
+  pedestrian_SC %>%
+  features(Count, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+pedestrian_SC %>%
+  autoplot(box_cox(Count, lambda_ped)) +
+  labs(y = paste("Pedestrians - lambda =", round(lambda_ped, 2)),
+       x = "Date",
+       title = paste("Daily Pedestrians - lambda = ", round(lambda_ped, 2)),
+       subtitle = "Southern Cross Station")
+
+```
+
+### Question 7
+
+#### Part a
+
+A plot of the gas production time series is below; there are apparent seasonal and trend-cycle components. Gas production has trended upwards at a steady rate since mid-2005; seasonally, Australian gas production peaks at the mid-point of every year and reaches a low point at the beginning of each year.
+
+```{r, 7a_gas5, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 7a
+gas <- 
+  tail(aus_production, 5*4) %>% 
+  select(Gas)
+
+gas %>%
+  autoplot(Gas) +
+  labs(x = "Quarter",
+       y = "Gas Production",
+       title = "Monthly Gas Production")
+
+```
+
+#### Part b
+
+The results of a multiplicative, classical decomposition of the Australian gas production data are below.
+
+```{r, 7b_gas_decomp, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 7b
+gas_class_dcmp_m <-
+  gas %>%
+  model(classical_decomposition(Gas, type = "multiplicative")) %>%
+  components()
+
+gas_class_dcmp_m %>%
+  autoplot() +
+  labs(y = "Production Impact",
+       title = "Classical Decomposition - Gas Production",
+       subtitle = "Multiplicative")
+
+```
+
+#### Part c
+
+The results from *Part b* support the observations of *Part a*. Interestingly, the trend-cycle component appears to have potential knots from mid-2007 through mid-2008, in line with the global economic difficulties of that time. The seasonal pattern peaks and valleys consistent with prior observation.
+
+#### Part d
+
+Seasonally adjusted data was pulled directly from the classical decomposition results (see R code). The plot below compares the seasonally adjusted data (black line) to the actual observations (grey, dotted line). As is shown, the seasonally adjusted data tracks nicely as a mid-point between seasonal peaks and valleys.
+
+```{r, 7d_season_adj, fig.show = "hold", out.width = "100%", echo = TRUE}
+
+#QUESTION 7d
+ggplot(gas_class_dcmp_m,
+       aes(x = Quarter,
+           y = season_adjust)) +
+  geom_line() +
+  geom_line(data = gas,
+            aes(x = Quarter,
+                y = Gas),
+            col = "grey",
+            lty = "dashed") +
+  labs(x = "Quarter",
+       y = "Seasonally Adjusted Production",
+       title = "Quarterly Gas Production",
+       subtitle = "Actual (grey) vs. Seasonally Adj (black)")
+
+```
+
+#### Part e
+
+The 18th observation was increased by 300, and the results of the change on the seasonally adjusted values is shown below (red line). Overall, the outlier toward the end of the data causes the seasonal adjustment of the classical decomposition to track more closely with the actual observations.
+
+Of note, the black line is the seasonally adjusted data from *Part d*.
+
+```{r, 7e_outlier1, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 7e
+gas_outlier1 <- gas
+gas_outlier1$Gas[length(gas_outlier1$Gas)*0.9] <- 
+  gas_outlier1$Gas[length(gas_outlier1$Gas)*0.9]+300
+
+gas_ol1_class_dcmp_m <-
+  gas_outlier1 %>%
+  model(classical_decomposition(Gas, type = "multiplicative")) %>%
+  components()
+
+ggplot(gas_class_dcmp_m,
+       aes(x = Quarter,
+           y = season_adjust)) +
+  geom_line() +
+  geom_line(data = gas,
+            aes(x = Quarter,
+                y = Gas),
+            col = "grey",
+            lty = "dashed") +
+  geom_line(data = gas_ol1_class_dcmp_m,
+            aes(x = Quarter,
+                y = season_adjust),
+            col = "red") +
+  labs(x = "Quarter",
+       y = "Seasonally Adjusted Production",
+       title = "Quarterly Gas Production",
+       subtitle = "Actual (grey) vs. Seasonally Adj (solid)")
+
+```
+
+#### Part f
+
+It makes a difference if an outlier is near the beginning versus middle versus end of the data. The left plot below shows two separate additions of outliers, one towards the end of the data (red) and one in the middle (blue). In both instances, the seasonally-adjusted values track closely with the actual observations. 
+
+The right-most plot includes an outlier toward the beginning of the data (green). In this case, seasonally-adjusted values trended closer to the original seasonally-adjusted values of *Part d*.
+
+```{r, 7f_outliers_midend, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 7f
+gasoutlier2 <- gas
+gasoutlier2$Gas[length(gasoutlier2$Gas)*0.5] <- 
+  gasoutlier2$Gas[length(gasoutlier2$Gas)*0.5]+300
+
+gas_ol2_class_dcmp_m <-
+  gasoutlier2 %>%
+  model(classical_decomposition(Gas, type = "multiplicative")) %>%
+  components()
+
+ggplot(gas_class_dcmp_m,
+       aes(x = Quarter,
+           y = season_adjust)) +
+  geom_line() +
+  geom_line(data = gas,
+            aes(x = Quarter,
+                y = Gas),
+            col = "grey",
+            lty = "dashed") +
+  geom_line(data = gas_ol1_class_dcmp_m,
+            aes(x = Quarter,
+                y = season_adjust),
+            col = "red") +
+  geom_line(data = gas_ol2_class_dcmp_m,
+            aes(x = Quarter,
+                y = season_adjust),
+            col = "blue") +
+  labs(x = "Quarter",
+       y = "Seasonally Adjusted Production",
+       title = "Quarterly Gas Production",
+       subtitle = "Actual (grey) vs. Seasonally Adj (solid)")
+
+gasoutlier3 <- gas
+gasoutlier3$Gas[length(gasoutlier3$Gas)*0.1] <- 
+  gasoutlier3$Gas[length(gasoutlier3$Gas)*0.1]+300
+
+gas_ol3_class_dcmp_m <-
+  gasoutlier3 %>%
+  model(classical_decomposition(Gas, type = "multiplicative")) %>%
+  components()
+
+ggplot(gas_class_dcmp_m,
+       aes(x = Quarter,
+           y = season_adjust)) +
+  geom_line() +
+  geom_line(data = gas,
+            aes(x = Quarter,
+                y = Gas),
+            col = "grey",
+            lty = "dashed") +
+  geom_line(data = gas_ol1_class_dcmp_m,
+            aes(x = Quarter,
+                y = season_adjust),
+            col = "red") +
+  geom_line(data = gas_ol2_class_dcmp_m,
+            aes(x = Quarter,
+                y = season_adjust),
+            col = "blue") +
+  geom_line(data = gas_ol3_class_dcmp_m,
+            aes(x = Quarter,
+                y = season_adjust),
+            col = "green") +
+  labs(x = "Quarter",
+       y = "Seasonally Adjusted Production",
+       title = "Quarterly Gas Production",
+       subtitle = "Actual (grey) vs. Seasonally Adj (solid)")
+
+```
+
+### Question 8
+
+An X11 decomposition of the retail data does reveal features not noticed from the plot of the time series. Firstly, although there is apparent change in the seasonality in later years, it wasn't as clear until the decomposition that seasonality in retail turnover diminished between 2000 and 2010. 
+
+Additionally, the irregularity of the data stands out and follows a pattern similar pattern as seasonality with reduced irregularity between 2000 and 2010.
+
+```{r, 8_retail_x11, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 8
+myseries_x11 <-
+  myseries %>%
+    model(x11 = X_13ARIMA_SEATS(Turnover~x11())) %>%
+    components
+
+autoplot(myseries_x11) +
+  labs(title = "Retail Turnover - X11 Decomposition",
+       y = "Turnover Impact")
+
+```
+
+### Question 9
+
+#### Part a
+
+The STL decomposition of the number of persons in the civilian labor force in Australia from February 1978 to August 1995 yields distinguishable trend-cycle, seasonal, and irregular components. Of first notice is the upward trend of the trend-cycle component; while a labor-force participation rate might yield stronger insights into the attitudes of workers in Australia, there's no doubt that the size of Australia's labor force has increased steadily overtime. The seasonal component has a clear pattern; the subseries plot offers deeper insight into the effect of the seasonal component. Overall, July, September, and December lead to increases in the labor force and follow the upward trend of the trend-cycle. Finally, the irregular component is generally unremarkable until the early-1990's at which point there is a pretty significant change in the component's pattern.
+
+#### Part b
+
+The recession of 1991/1992 is visible in the estimated components, seen during the significant downward jump of the irregular component.
+
+
+### Question 10
+
+#### Part a
+
+Plots of Canadian gas time series data are below. Most striking in the plots is the change in seasonal effects over time. Earlier years saw only slight differences in production between months; over time, and especially in the 1970's and 1980's, seasonal effects became more extreme before settling back down.
+
+```{r, 10a_plots, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 10a
+canadian_gas %>%
+  autoplot(Volume) +
+  labs(x = "Month",
+       y = "Volume",
+       title = "Canadian Gas Production")
+
+canadian_gas %>%
+  gg_season(Volume) +
+  labs (x = "Month",
+        y = "Volume",
+        title = "Canadian Gas Production",
+        subtitle = "Seasonal Plot")
+
+canadian_gas %>%
+  gg_subseries(Volume) +
+  labs(x = "Year",
+       y = "Volume",
+       title = "Canadian Gas Production",
+       subtitle = "Seasonal Subseries")
+
+```
+
+#### Part b
+
+Plots of potential STL decompositions are below with Trend windows 8 periods longer than Seasonal windows. By the time a default window size is reached (trend = 21, season = 13), there isn't a lot of effect on the overall results of the decomposition. As is apparent through all of the plots, the seasonal component widens towards the middle of the observation time-period.
+
+```{r, 10b_STLdecomp, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#QUESTION 10b
+seasonal_vector <- c(5, 7, 9, 11, 13, 15, 17, 19, 21)
+trend_vector <- c(13, 15, 17, 19, 21, 23, 25, 27, 29)
+
+for(i in 1:9) {
+  
+  ggp_stl1 <-
+    canadian_gas %>%
+      model(
+        STL(Volume ~ trend(window = trend_vector[i]) +
+              season(window = seasonal_vector[i]),
+            robust = TRUE)) %>%
+      components() %>%
+      autoplot() +
+    labs(x = "Month",
+         y = "Production Impact",
+         title = "Gas Production - STL Decomposition",
+         subtitle = paste("Trend Window - ", trend_vector[i],
+                          "Seasonal Window - ", seasonal_vector[i]))
+  
+  print(ggp_stl1)
+  
+}
+
+```
+
+#### Part c
+
+The plot below demonstrates well how the seasonal component of Canadian gas production changed over time. The middle of the chart shows somewhat predictable seasonality, with slight changes in production throughout the year, reaching a minimum in July. Over time, it is clear that the shape of the seasonal curves changed, as demonstrated by the lines of a bluer hue. Since the extreme observations, seasonality has returned somewhat to its old normal; however, there continue to be different seasonal figures each month, versus a smoother curve throughout the year.
+
+```{r, 10c_seasonality, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 10c
+cangas_stl <-
+  canadian_gas %>%
+  model(
+    STL(Volume ~ trend(window = 21) +
+          season(window = 13),
+        robust = TRUE)) %>%
+  components()
+
+cangas_stl %>%
+  gg_season(season_year) +
+  labs(x = "Month",
+       y = "Volume",
+       title = "Monthly Seasonal Volume",
+       subtitle = "Seasonal Plot")
+
+```
+
+#### Part d
+
+The plot below shows a plausible seasonally adjusted series; of note, the values were taken from the results of the STL decomposition (trend = 21, season = 13). As is shown, there continues to be some irregularity in the data; however, seasonal affects have been diminished in the seasonally-adjusted values.
+
+```{r, 10d_season_adj, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 10d
+ggplot(data = cangas_stl,
+       aes(x = Month,
+           y = season_adjust)) +
+  geom_line(col = "black") +
+  geom_line(data = canadian_gas,
+            aes(x = Month,
+                y = Volume),
+            col = "grey",
+            lty = "dashed") +
+  labs(x = "Month",
+       y = "Volume",
+       title = "Seasonally Adj. vs. Actual Volume (dotted)")
+
+```
+
+#### Part e
+
+X11 and SEATS seasonally-adjusted values have been plotted against the STL decomposition of *Part d*. Overall, the decompositions produce similar results. However, it is clear that the X11 and SEATS decomposition have diminished the seasonal and irregular effects in the data even further.
+
+```{r, 10e_x11_seats, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+#QUESTION 10e
+cangas_x11 <-
+  canadian_gas %>%
+  model(x11 = X_13ARIMA_SEATS(Volume~x11())) %>%
+  components()
+
+cangas_seats <-
+  canadian_gas %>%
+  model(seats = X_13ARIMA_SEATS(Volume~seats())) %>%
+  components()
+
+ggplot(data = cangas_stl,
+       aes(x = Month,
+           y = season_adjust)) +
+  geom_line(col = "black") +
+  geom_line(data = canadian_gas,
+            aes(x = Month,
+                y = Volume),
+            col = "grey",
+            lty = "dashed") +
+  geom_line(data = cangas_x11,
+            aes(x = Month,
+                y = season_adjust),
+            col = "blue") +
+  geom_line(data = cangas_seats,
+            aes(x = Month,
+                y = season_adjust),
+            col = "green") +
+  labs(x = "Month",
+       y = "Volume",
+       title = "Seasonally Adj. vs. Actual Volume (dotted)",
+       subtitle = "STL v X11 v SEATS")
+
+```
+
+\newpage
+
+### R Code
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```

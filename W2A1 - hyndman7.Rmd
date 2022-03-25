@@ -1,0 +1,923 @@
+---
+title: "Chapter 7 Exercises, Week 2"
+author: "Timothy White"
+date: "3/27/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, library_invocation, echo = FALSE, include = FALSE}
+
+library("feasts")
+library("seasonal")
+library("tsibble")
+library("tsibbledata")
+library("dplyr")
+library("ggplot2")
+library("forecast")
+library("fable")
+library("fpp3")
+
+```
+
+**Unless otherwise noted, all R code can be found at the end**
+
+### Question 1
+
+#### Part a
+
+Plots of January 2014 electricity demand in Victoria against daily maximum temperature and day of the month are displayed below. The plot of electricity demand versus day of the month is not very insightful other than to display that electricity demand varied throughout the month. Of note, to simplify model interpretation, electricity demand figures were divided by a factor of $1,000$.
+
+Electricity demand displays a positive relationship to temperature. A regression model, summarized below, verifies the positive relationship suggesting that daily electricity demand increases by approximately $6,500$ MW ($6.5$ GW) for every increase in temperature of 1 degree celsius. According to the table documentation, the temperature increases are measured in Melbourne, Australia. This positive relationship is to be expected. As temperatures rise in January, Summer in Victoria, people are more likely to use air conditioning and for longer periods of time.
+
+```{r, 1a_Jan14Elec_tsibble, echo = FALSE}
+#QUESTION 1, PART A
+jan14_vic_elec <- vic_elec %>%
+                    filter(yearmonth(Time) == yearmonth("2014 Jan")) %>%
+                    mutate(Demand = Demand/1000) %>%
+                    index_by(Date = as.Date(Time)) %>%
+                    summarize(Demand = sum(Demand),
+                              Temperature = max(Temperature))
+
+```
+
+```{r, 1a_DemandTemp_plots, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+#Plot of temperature vs. electricity demand
+ggplot(data = jan14_vic_elec,
+       aes(x = Temperature,
+           y = Demand)) +
+  geom_point() +
+  labs(x = "Temperature",
+       y = "Jan 2014 Electricity Demand",
+       title = "Victoria Jan 2014 Electricity Demand",
+       subtitle = "Temperature Relationship")
+
+#Plot of date vs. electricity demand
+autoplot(jan14_vic_elec, Demand) +
+  labs(x = "Date",
+       y = "Jan 2014 Electricity Demand",
+       title = "Victoria Jan 2014 Electricity Demand",
+       subtitle = "Movement over Month")
+
+```
+
+```{r, 1a_DemandTemp_lm, fig.show = "hold", out.width = "100%", echo = FALSE}
+
+jan14_vic_elec_tslm <-
+  jan14_vic_elec %>%
+  model(tslm = TSLM(Demand~Temperature))
+
+report(jan14_vic_elec_tslm)
+
+```
+
+#### Part b
+
+Residual plots of the model show no significant pattern in residuals over time, and autocorrelation within reasonability. Although there appears to be left skew in the residuals, suggesting a potential tendency of the model to significantly overpredict electricity useage, this appears to be associated with a 25 degree day with lower than usual electricity demand. Given the low number of observations used in building the model, it would be helpful to add more January observations from other years. Doing so would better underscore the existence of potentially higher prediction variability for lower maximum temperatures; this would not be largely unexpected as a max temperature of 25 degrees celsius does not necessarily indicate an overall hot day. 
+
+Overall, residual plots suggest adequacy in the model, barring other considerations such as $CV$, $AIC_{c}$, and/or $BIC$. This position is further validated by plots of residuals against the Temperature predictor and the model's fitted values which display no relationship and relatively constant variance. Nevertheless, upon further consideration, using daily average temperature may have produced stronger results.
+
+```{r, 1b_Residual_Plot, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 1, PART B
+jan14_vic_elec_tslm %>%
+  gg_tsresiduals()
+
+plot(residuals(jan14_vic_elec_tslm)$".resid"~jan14_vic_elec$Temperature,
+     xlab = "Temperature",
+     ylab = "TSLM Residuals",
+     main = "TSLM Residuals vs. Temp")
+abline(h = 0, col = "red", lty = "dashed")
+
+plot(residuals(jan14_vic_elec_tslm)$".resid"~fitted(jan14_vic_elec_tslm)$".fitted",
+     xlab = "TSLM Fitted",
+     ylab = "TSLM Residuals",
+     main = "TSLM Residuals vs. TSLM Fitted")
+abline(h = 0, col = "red", lty = "dashed")
+
+```
+
+#### Part c
+
+The point forecast of total electricity demand for a day with maximum temperature of $15^{o} C$ is $140,000 MW$, while for a day with maximum temperature of $35^{o} C$ it is $270,000 MW$.
+
+It is likely that the forecast for the day with $35^{o} C$ as the maximum temperature is most accurate, as it is likely that the overall daily temperature was relatively high. However, the forecast for the $15^{o} C$ day should be viewed with some skepticism. Firstly, it is likely that the model has higher variability in predictions for days with lower maximum temperatures as it is more unclear the overall temperature throughout a day. Secondly, a temperature of $15^{o} C$ falls outside of the temperatures used to train the model, inherently making any forecast on the temperature subject to skepticism.
+
+```{r, 1c_15deg_forecast, echo = FALSE}
+#QUESTION 1, PART C
+Temp_scenarios <- scenarios(
+  
+  Temp15 = new_data(jan14_vic_elec, 1) %>%
+    mutate(Temperature = 15),
+  
+  Temp35 = new_data(jan14_vic_elec, 1) %>%
+    mutate(Temperature = 35),
+  
+  names_to = "Scenaro"
+  
+)
+
+Temp_forecast <- jan14_vic_elec_tslm %>%
+                  forecast(new_data = Temp_scenarios)
+  
+jan14_vic_elec %>%
+  autoplot(Demand) +
+  autolayer(Temp_forecast) +
+  labs(title = "Temperature Forecast",
+       subtitle = "15 and 35 Degrees",
+       x = "Date",
+       y = "Electricity Demand")
+
+```
+
+#### Part d
+
+Prediction intervals for the forecasts performed in Part c are shown below.
+
+```{r, 1d_predint, echo = FALSE}
+#QUESTION 1, PART D
+Temp_hilo <- jan14_vic_elec_tslm %>%
+              forecast(new_data = Temp_scenarios) %>%
+              hilo()
+
+print(paste("Temp15 Demand (GW) Forecast, 80% Pred. Interval - ", round(Temp_hilo$"80%"[1], 2)))
+
+print(paste("Temp15 Demand (GW) Forecast, 95% Pred. Interval - ", round(Temp_hilo$"95%"[1], 2)))
+
+print(paste("Temp35 Demand (GW) Forecast, 80% Pred. Interval - ", round(Temp_hilo$"80%"[2], 2)))
+
+print(paste("Temp35 Demand (GW) Forecast, 95% Pred. Interval - ", round(Temp_hilo$"95%"[2], 2)))
+
+```
+
+#### Part e
+
+A full plot of Victoria electricity demand versus Victoria daily maximum temperature is shown below.
+
+```{r, 1e_DemandTempFull_plots, fig.show = "hold", out.width = "100%", echo = FALSE}
+#QUESTION 1, PART E
+#Plot of temperature vs. electricity demand
+ggplot(data = vic_elec,
+       aes(x = Temperature,
+           y = Demand)) +
+  geom_point() +
+  labs(x = "Temperature",
+       y = "Electricity Demand (MW)",
+       title = "Victoria Electricity Demand",
+       subtitle = "Temperature Relationship")
+
+```
+
+The plot appears to display a quadratic relationship between electricity demand and temperature throughout a year. This finding is not unexpected; people demand air conditioning in hotter weather and heat in colder weather. Unsurprisingly, the model built to predict January electricity demand is unreliable throughout the year as it would over-predict electricity demand during times of more moderate temperatures and under-predict electricity demand during times of cold temperatures.
+
+### Question 2
+
+#### Part a
+
+A history of winning Olympic race times by time distance and sex is shown in the plots below. Of note, data from 1916 was excluded as the Olympic games were not held due to World War I. Overall, all the plots seem to demonstrate a downward trend in winning times for each event, especially for the men. Unfortunately, data for women is somewhat inconsistent with some events not being eligible for women racers until later in history; nevertheless, the trend is generally the same for women.
+
+The graphs tend to show a level of convexity; this finding is not wholly surprising as there is theoretically a true minimum time in which a race can be finished. Early reductions in time are generally larger than those seen in more recent history.
+
+```{r, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 2, PART A
+length_vector <- as.vector(unique(olympic_running$Length))
+
+olympic_running_model <-
+  
+  olympic_running %>%
+  filter(Year != 1916,
+         Year != 1940,
+         Year != 1944)
+
+for(i in 1:length(length_vector)) {
+  
+  olympic_loop <- 
+    
+    olympic_running_model %>%
+    filter(Length == length_vector[i]) %>%
+    autoplot(Time) +
+    labs(x = "Year",
+         y = "Time (sec)",
+         title = "Winning Running Times (sec)",
+         subtitle = paste(length_vector[i], "Meter Race by Sex"))
+  
+  print(olympic_loop)
+  
+}
+
+```
+
+#### Part b
+
+Winning times have been decreasing at an average rate of 2.34 seconds per year across all racing events. A summary of the average rate of reduction by race is shown in the table below.
+
+```{r, 2b_Regression, echo = FALSE}
+#QUESTION 2, PART B
+olympic_running_tslm <-
+  olympic_running_model %>%
+    model(TSLM(Time~trend()))
+
+olympic_Length <- unique(olympic_running_tslm$Length)
+olympic_Sex <- unique(olympic_running_tslm$Sex)
+olympic_running_Coeff <- c()
+olympic_running_CoeffN <- c()
+
+for(i in 1:length(olympic_Sex)) {
+  
+  olympic_running_loop1 <-
+    olympic_running_tslm %>%
+    filter(Sex == olympic_Sex[i])
+  
+  for(j in 1:length(olympic_Length)) {
+    
+    olympic_running_loop2 <-
+      olympic_running_loop1 %>%
+      filter(Length == olympic_Length[j]) %>%
+      coefficients()
+    
+    olympic_running_CoeffN[length(olympic_running_CoeffN)+1] <- 
+      paste0("Race", 
+             olympic_Length[j], 
+             "_", 
+             olympic_Sex[i])
+    
+    olympic_running_Coeff[length(olympic_running_Coeff)+1] <- 
+           subset(olympic_running_loop2, 
+                  olympic_running_loop2$term=="trend()")$estimate
+    
+  }
+  
+}
+
+olympic_running_tslm_CoeffSumm <- data.frame(cbind(olympic_running_CoeffN,
+                                                   round(olympic_running_Coeff, 2)))
+
+colnames(olympic_running_tslm_CoeffSumm) <- c("Race Description", 
+                                              "Avg. Change (sec)")
+
+print(olympic_running_tslm_CoeffSumm)
+
+```
+
+#### Part c
+The plots below show residuals against the year for the regression associated with each of the races. Residual results are mixed across races with several displaying the effects of the convexity discussed in **Part a**. For example, in the 1500m men's race, the model tends to overpredict in earlier years and overpredict in later years the time for finishing; this residual pattern would be indicative of a convex relationship in the original data.
+
+Given these findings with the residuals, it is reasonable to conclude that the models based solely on trend are unreliable with time. In addition the impossibility of eventually predicting times that are below $0$ seconds, the predictions going forward will become more inaccurate.
+
+```{r, 2c_residuals, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 2, PART C
+for(i in 1:length(olympic_Sex)) {
+  
+  olympic_residual_loop1 <- 
+    residuals(olympic_running_tslm) %>%
+    filter(Sex == olympic_Sex[i])
+  
+  olympic_running_loop1 <-
+    olympic_running_model %>%
+    filter(Sex == olympic_Sex[i])
+  
+  for(j in 1:length(olympic_Length)) {
+    
+    olympic_residual_loop2 <-
+      olympic_residual_loop1 %>%
+      filter(Length == olympic_Length[j])
+    
+    olympic_running_loop2 <-
+      olympic_running_loop1 %>%
+      filter(Length == olympic_Length[j])
+    
+    plot(x = olympic_running_loop2$Year,
+         y = olympic_residual_loop2$".resid",
+         xlab = "Year",
+         ylab = "Regression Residual",
+         main = paste("Residual v Year"),
+         sub = paste0("Race", 
+                           olympic_Length[j],
+                           "_",
+                           olympic_Sex[i]))
+    abline(h = 0, col = "red", lty = "dashed")
+    
+  }
+  
+}
+
+```
+
+#### Part d
+
+Forecasts for the 2020 results for each of the races is shown below, along with a prediction interval. The assumptions made in these calculations is that there will continue to be a downward trend in winning finishing times for each of the races. While this assumption may hold, the reduction will be more asymptotic with finishing times reducing by less and less as reduction happens.
+
+```{r, 2d_2020Forecast, echo = FALSE}
+#QUESTION 2, PART D
+Temp_forecast <- olympic_running_tslm %>%
+  forecast(new_data(olympic_running_model, 1)) %>%
+  hilo()
+
+for(i in 1:length(rownames(Temp_forecast))) {
+  
+  print(paste("2020 FORECAST -",
+              paste0(Temp_forecast[i,1], "m"),
+              paste0("(",Temp_forecast[i,2],")"))
+  )
+  
+  print(
+    paste("Point Estimate - ", 
+         round(Temp_forecast[i,6], 3))
+  )
+  
+  print(
+    paste("80% Prediction Interval -",
+          Temp_forecast$"80%"[i])
+  )
+  
+  print(
+    paste("95% Prediction Interval -",
+          Temp_forecast$"95%"[i])
+  )
+  
+  cat("\n")
+}
+
+```
+
+### Question 3
+
+The following mathematical steps show that ${\beta}_1$ is the elasticity coefficient of $log(y) = {\beta}_0 + {\beta}_1log(x) + {\epsilon}$.
+
+$log(y) = {\beta}_0 + {\beta}_1log(x) + {\epsilon}$ \newline
+$y = 10^{({\beta}_0 + {\beta}_1log(x) + {\epsilon})}$ \newline
+$y = 10^{({\beta}_0 + {\epsilon})}*10^{log(x)^{{\beta}_1}}$ \newline
+$y = x^{{\beta}_1}*10^{({\beta}_0 + {\epsilon})}$ \newline
+
+It's important to note here that $x^{{\beta}_1} = y/(10^{({\beta}_0 + {\epsilon})})$. This relationship will be useful in the derivation step.
+
+$dy/dx = {\beta}_1x^{{\beta}_1-1} = {\beta}_1(x^{{\beta}_1}/x) = {\beta}_1[y/(x*10^{({\beta}_0 + {\epsilon})})]$
+\newline
+${\beta}_1 = (dy/dx)*(x/y)*10^{({\beta}_0 + {\epsilon})}$
+
+As the first 2 variables of the final equation show, ${\beta}_1$ is the elasiticity coefficient.
+
+### Question 4
+
+#### Part a
+
+A time plot of the *souvenirs* dataset is shown below; the multiplicative decomposition of the data using the X-11 method is shown next to it. The seasonally-adjusted data has steadily increased. Seasonally, the data spikes at two points throughout every year corresponding with the Christmas and surfing festival; it appears as though each is similar in popularity as the seasonal spikes are roughly the same in magnitude.
+
+The irregular component appears to display higher levels of variability during earlier years of the wharf shop's operations; overtime, the irregularity has decreased in magnitude.
+
+Finally, a seasonal plot shows that sales volume tends to increase throughout the year; the plot continues to display an exponentially increasing trend throughout each year, and highlights a spike in tourism during the surfing festival.
+
+```{r, 4a_timeplot, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 4, PART A
+souvenirs %>%
+  mutate(Month = yearmonth(Month)) %>%
+  autoplot(Sales) +
+  labs(x = "Month",
+       y = "Sales",
+       title = "Monthly Sales",
+       subtitle = "Wharf Shop, Queensland")
+
+souvenirs_x11 <- souvenirs %>%
+                  mutate(Month = yearmonth(Month)) %>%
+                  model(x11 = X_13ARIMA_SEATS(Sales ~ x11())) %>%
+                  components()
+
+autoplot(souvenirs_x11) +
+  labs(title = "X11 Decomp - Souvenirs Dataset")
+
+souvenirs %>%
+  gg_season(Sales) +
+  labs(y = "Sales Volume",
+       title = "Seasonal Plot: Sales Volume")
+
+```
+
+#### Part b
+
+It is appropriate and likely necessary to take logarithms of the Sales data before fitting a model due to the convexity present in the underlying trend of sales volume over time; this is seen in the trend-cycle component of the data above. Convexity implies some form of exponential relationship with time; taking a logarithm of the Sales data will make the trend more linear.
+
+#### Part c
+
+A regression model has been fit to the logarithm of sales data with a linear trend, seasonal dummies, and a "surfing festival" dummy variable, as the code below shows. The final model was assigned to the variable *surfing_tslm*. Of note, the seasonal dummy was forced to be based on the month; using the *season()* option within the *TSLM* function resulted in the year being used as the seasonality measure.
+
+```{r, 4c_regression, echo = TRUE}
+#QUESTION 4, PART C
+date_loop <- as.Date(souvenirs$Month)
+
+surfing_loop <- c()
+
+for(i in 1:length(date_loop)) {
+  
+  if(year(date_loop[i])>=1988 & month(date_loop[i]) == 3) {
+      
+    surfing_loop[i] <- 1
+    
+  } else {
+  
+    surfing_loop[i] <- 0
+    
+  }
+  
+}
+
+souvenirs_model <- 
+  souvenirs %>%
+  add_column(surf_dummy = surfing_loop) %>%
+  add_column(log_sales = log(souvenirs$Sales)) %>%
+  add_column(season_month = as.factor(month(souvenirs$Month)))
+
+souvenirs_tslm <-
+  souvenirs_model %>%
+  model(tslm = TSLM(log_sales~trend()+season_month+surf_dummy))
+
+```
+
+#### Part d
+
+Plots of the residual against time and against fitted values are shown below. The plot comparing residuals to fitted values is largely unremarkable and displays mostly consistent variability across fitted values.
+
+On the other hand, the plot of residuals over time does raise concerns. Although the plot itself looks sporadic, there do appear to be periods in a row of consistent over- or under-prediction of sales volumes, especially in the later years. This would suggest a certain degree of autocorrelation between the residuals.
+
+```{r, 4d_residualplot, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 4, PART D
+ggp_restime <- 
+  ggplot(data = souvenirs_model,
+         aes(x = Month,
+             y = residuals(souvenirs_tslm)$".resid")) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Month",
+       y = "Regression Residuals",
+       title = "Residuals vs. Time")
+
+print(ggp_restime)
+
+ggp_resfitted <-
+  ggplot(data = souvenirs_model,
+         aes(x = fitted(souvenirs_tslm)$".fitted",
+             y = residuals(souvenirs_tslm)$".resid")) +
+  geom_point() +
+  labs(x = "Regression Fitted",
+       y = "Regression Residuals",
+       title = "Residuals vs. Fitted")
+
+print(ggp_resfitted) 
+
+```
+
+#### Part e
+
+Boxplots of each month's residuals are plotted below. Overall, the plots by month show different levels of variability and skew. The winter months, June and July primarily, appear to be most accurately predicted by the model; this finding is expected considering the Winter months are free of other factors that might cause added variability in tourism values. Given the observations surrounding the residual distribution by month, it is likely that the model is inadequate in its ability to accurately predict sales volume, especially at peak tourist points throughout the year, which would be the best use for the model.
+
+```{r, 4e_boxplot, fig.show = "hold", out.width = "100%", echo = FALSE}
+#QUESTION 4, PART E
+souvenir_tslm_res <-
+  residuals(souvenirs_tslm) %>%
+    add_column(Month_Val = as.factor(month(residuals(souvenirs_tslm)$Month)))
+
+ggplot(data = souvenir_tslm_res,
+       aes(x = Month_Val,
+           y = .resid,
+           group = Month_Val)) +
+  geom_boxplot() +
+  labs(x = "Month (#)",
+       y = "Residual",
+       title = "Boxplots of Residuals",
+       subtitle = "by Month")
+
+```
+
+#### Part f
+
+The values of the coefficients produced in *souvenirs_tslm* are shown below.
+
+The values of the coefficient are representative of the percentage change in overall sales volume (e.g., as part of transforming $log(y)$ to $y$). In summary:
+
+* Sales volume is trending upwards approximately 2% each month;
+* Sales volume in February increases 25% relative to January;
+* Sales volume in March increases 27% relative to January;
+  * The surfing festival increases sales volume by an additional 50% in this month
+* Sales volume in April increases 38% relative to January;
+* Sales volume in May increases 41% relative to January;
+* Sales volume in June increases 45% relative to January;
+* Sales volume in July increases 61% relative to January;
+* Sales volume in August increases 59% relative to January;
+* Sales volume in September increases 67% relative to January;
+* Sales volume in October increases 75% relative to January;
+* Sales volume in November increases 121% relative to January; and
+* Sales volume in December increases 196% relative to January.
+
+```{r, 4f_coeff, echo = FALSE}
+#QUESTION 4, PART F
+report(souvenirs_tslm)
+
+```
+
+#### Part g
+
+The Ljung-Box test suggests that there is a significant level of autocorrelation between residual values, a result suspected from the plot of residuals over time, and shown more clearly with the ACF plot below. In this way, there is an aspect of the model that has not been properly captured.
+
+```{r, 4g_ljungbox, echo = FALSE}
+#QUESTION 4, PART G
+augment(souvenirs_tslm) %>%
+  features(.innov, ljung_box, lag = 20, dof = 14)
+
+ACF_res <-
+  augment(souvenirs_tslm) %>%
+    ACF(.innov) %>%
+    autoplot() +
+    labs(x = "lag",
+         y = "ACF",
+         title = "ACF Plot",
+         subtitle = "Sales Model Residuals")
+
+print(ACF_res)
+
+```
+
+#### Part h
+
+The monthly sales predictions are shown below, along with prediction intervals. Of note, the predicted point estimates and prediction intervals have been converted to the actual sales predictions, while the visualization of the forecast has been left in its original state of $log(sales)$.
+
+```{r, 4h_forecast, echo = FALSE}
+#QUESTION 4, PART H
+souvenir_forecast_months <- 
+  new_data(souvenirs_model, 36)
+
+surf_dummy <- c()
+
+for(i in 1:length(rownames(souvenir_forecast_months))) {
+  
+  if(month(souvenir_forecast_months[i,]$Month)==3) {
+    
+    surf_dummy[i] <- 1
+    
+  } else {
+    
+    surf_dummy[i] <- 0
+    
+  }
+  
+}
+
+souvenir_forecast_months <-
+  souvenir_forecast_months %>%
+  add_column(surf_dummy = surf_dummy) %>%
+  add_column(season_month = as.factor(month(souvenir_forecast_months$Month)))
+
+souvenir_forecast <- souvenirs_tslm %>%
+  forecast(souvenir_forecast_months)
+
+souvenirs_forecast_plot <-
+  souvenirs_model %>%
+  autoplot(log_sales) +
+  autolayer(souvenir_forecast) +
+  labs(x = "Month",
+       y = "log(Sales) Volume",
+       title = "Sales Volume",
+       subtitle = "Actual + Forecast (log)")
+
+print(souvenirs_forecast_plot)
+
+souvenir_forecast_hilo <-
+  souvenirs_tslm %>%
+  forecast(souvenir_forecast_months) %>%
+  hilo()
+
+for(i in 1:length(rownames(souvenir_forecast_hilo))){
+  
+  print(paste("PREDICTION INTERVALS (Adj) - ",
+              souvenir_forecast_hilo$Month[i]))
+  
+  print(paste("Point Est. - ",
+              exp(souvenir_forecast_hilo$.mean[i])))
+  
+  print(paste("80% - ",
+              exp(souvenir_forecast_hilo$`80%`[i])))
+  
+  print(paste("95% - ",
+              exp(souvenir_forecast_hilo$`95%`[i])))
+  
+  cat("\n")
+  
+}
+
+```
+
+#### Part i
+
+The model could likely be improved by adding a different time element. For example, instead of predicting next month's sale volumes from this month's levels, it may be more appropriate to use last year's sale volumes in the same month. This approach would eliminate, to a degree, the need for dummy variables, as the time element would incorporate those elements directly.
+
+### Question 5
+
+#### Part a
+
+Some of the results of a harmonic regression (K=4) and six others with Fourier terms ranging from 5 to 10 are shown below. Overall, the fitted terms are close in size to the observed values in the training data; this is shown by the scatterplots on the right side of the panel of graphs. Of note, it does not appear as though any of the models are generally accurate at predicting the peaks and valleys of finished barrels. 
+
+If these charts served as the only source of model validation, it would be difficult to discern which model is most appropriate.
+
+```{r, 5a_harmonic, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 5, PART A
+us_gasoline_q5 <-
+  us_gasoline %>%
+  filter(year(us_gasoline$Week) <= 2004)
+
+
+for(i in 4:10) {
+
+  us_gasoline_prod <-
+    us_gasoline_q5 %>%
+    model(tslm = TSLM(Barrels~trend() + fourier(K=i)))
+
+  us_gasoline_fitted <-
+    data.frame(x = us_gasoline_q5$Week,
+               y = fitted(us_gasoline_prod)$".fitted")
+  
+  colnames(us_gasoline_fitted) <- c("Week", "Barrels")
+  
+  ggp_obs <-
+    ggplot(data = us_gasoline_q5,
+           aes(x = Week,
+               y = Barrels)) +
+    geom_line(col = "grey") +
+    theme_bw()
+  
+  ggp_fit_obs_time <- 
+    ggp_obs +
+      geom_line(data = us_gasoline_fitted,
+                col = "red",
+                lty = "dashed") +
+    labs(title = "Observed and Fitted Values",
+         subtitle = paste("K = ", i))
+  
+  print(ggp_fit_obs_time)
+  
+  ggp_fit_obs <-
+    ggplot(data = us_gasoline_q5,
+           aes(x = Barrels,
+               y = fitted(us_gasoline_prod)$".fitted")) +
+    geom_point() +
+    geom_abline(slope = 1,
+                intercept = 0,
+                col = "red",
+                lty = "dashed") +
+    labs(x = "Observed",
+         y = "Fitted",
+         title = "Fitted vs. Observed",
+         subtitle = paste("K = ", i))
+  
+  print(ggp_fit_obs)
+  
+}
+
+```
+
+#### Part b
+
+As was alluded in *Part a*, comparing fitted to observed values does not offer enough by itself to validate a model for supplies of US finished motor gasoline product. The graphs below display the $CV$ and $AIC_c$ values associated with every Fourier model (K = 1 through K = 26). The red point on each graph signifies the K value at which either the $AIC_c$ and/or $CV$ reach a minimum. In the case of US gasoline data, both metrics are minimized when 7 Fourier terms are included in the model.
+
+```{r, 5b_AICc_CV, fig.show = "hold", out.width = "50%", echo = FALSE}
+#QUESTION 5, PART B
+AICc_vector <- c()
+CV_vector <- c()
+Fourier_vector <- c()
+
+#m = 52 therefore K <= 26
+for(i in 1:26) {
+  
+  us_gasoline_prod <-
+    us_gasoline_q5 %>%
+    model(tslm = TSLM(Barrels~trend() + fourier(K=i)))
+  
+  AICc_vector[i] <-
+    glance(us_gasoline_prod)$AICc
+  
+  CV_vector[i] <-
+    glance(us_gasoline_prod)$CV
+  
+  Fourier_vector[i] <- i
+  
+}
+
+Fourier_df <- data.frame(cbind(Fourier_vector,
+                               CV_vector,
+                               AICc_vector))
+
+colnames(Fourier_df) <- c("Fourier_Value", "CV_Value", "AICc_Value")
+
+Fourier_df$AICc_lab <- paste("K = ", Fourier_df$Fourier_Value, cat("\n"),
+                             ", AICc = ", round(Fourier_df$AICc_Value, 2))
+
+Fourier_df$CV_lab <- paste("K = ", Fourier_df$Fourier_Value, cat("\n"),
+                             ", CV = ", round(Fourier_df$CV_Value, 2))
+
+ggp_AICc <- 
+  ggplot(data = Fourier_df,
+         aes(x = Fourier_Value,
+             y = AICc_Value)) +
+  geom_point() +
+  geom_point(data = Fourier_df[which.min(Fourier_df$AICc_Value),], 
+             color = "red",
+             size = 3) +
+  geom_text(data = Fourier_df[which.min(Fourier_df$AICc_Value),],
+            aes(Fourier_Value, AICc_Value, label = AICc_lab)) +
+  labs(x = "Fourier Value",
+       y = "AICc Value",
+       title = "AICc Value vs. Fourier Value",
+       subtitle = "US Gasoline")
+
+print(ggp_AICc)
+
+ggp_CV <- 
+  ggplot(data = Fourier_df,
+         aes(x = Fourier_Value,
+             y = CV_Value)) +
+  geom_point() +
+  geom_point(data = Fourier_df[which.min(Fourier_df$CV_Value),], 
+             color = "red",
+             size = 3) +
+  geom_text(data = Fourier_df[which.min(Fourier_df$CV_Value),],
+            aes(Fourier_Value, CV_Value, label = CV_lab)) +
+  labs(x = "Fourier Value",
+       y = "CV Value",
+       title = "CV Value vs. Fourier Value",
+       subtitle = "US Gasoline")
+
+print(ggp_CV)
+
+```
+
+#### Part c
+
+The residual plots of a trend model with 7 Fourier terms are shown below. Overall, residuals over time show a largely random pattern and strong normality. Nevertheless, the ACF plot does suggest potentially strong autocorrelation among residuals. The results of a Ljung-Box test align with this visual finding, and suggest statistically significant autocorrelation between residuals.
+
+```{r, 5c_K7, fig.show = "hold", out.width = "100%", echo = FALSE}
+#QUESTION 5, PART C
+us_gasoline_prod7 <-
+  us_gasoline_q5 %>%
+  model(tslm = TSLM(Barrels~trend() + fourier(K=7)))
+
+us_gasoline_prod7 %>%
+  gg_tsresiduals()
+
+augment(us_gasoline_prod7) %>%
+  features(.innov, ljung_box, lag = 20, dof = 9)
+
+```
+
+#### Part d
+
+The graph below shows the forecasts generated by the model with 7 Fourier terms (grey dotted line). The light blue and dark blue dotted lines represent the boundaries of the 95% and 80% prediction intervals, respectively. Finally, the black line are the actually observed values for 2005. 
+
+Overall, the forecasted values for 2005 are pretty reasonable. Actual observations more often than not fell within the 80% prediction interval, which appears to have an average range of 750,000 Barrels per day. Further, and as the metric above the graph indicates, the 2005 forecast had an average accuracy of 100.5%.
+
+```{r, 5d_forecast, fig.show = "hold", out.width = "100%", echo = FALSE}
+#QUESTION 5, PART D
+us_gasoline_forecast05 <-
+  us_gasoline_prod7 %>%
+  forecast(new_data(us_gasoline_q5, 52)) %>%
+  hilo()
+
+us_gas05 <- data.frame(
+                cbind(us_gasoline_forecast05$Week,
+                      us_gasoline_forecast05$.mean,
+                      unpack_hilo(us_gasoline_forecast05, "80%")$`80%_lower`,
+                      unpack_hilo(us_gasoline_forecast05, "80%")$`80%_upper`,
+                      unpack_hilo(us_gasoline_forecast05, "95%")$`95%_lower`,
+                      unpack_hilo(us_gasoline_forecast05, "95%")$`95%_upper`)
+                )
+
+colnames(us_gas05) <- c("Week",
+                        "Mean",
+                        "Upper80",
+                        "Lower80",
+                        "Upper95",
+                        "Lower95")
+
+us_gas05_80L <- 
+  us_gas05 %>%
+  select(Week, Barrels = Lower80)
+
+us_gas05_80U <- 
+  us_gas05 %>%
+  select(Week, Barrels = Upper80)
+
+us_gas05_95L <- 
+  us_gas05 %>%
+  select(Week, Barrels = Lower95)
+
+us_gas05_95U <- 
+  us_gas05 %>%
+  select(Week, Barrels = Upper95)
+
+us_gas05_point <- 
+  us_gas05 %>%
+  select(Week, Barrels = Mean)
+
+us_gasoline %>%
+  filter(year(Week)==2005) %>%
+  ggplot(aes(x = Week,
+             y = Barrels)) +
+  geom_line() +
+  labs(x = "Week",
+       y = "Barrels",
+       title = "Barrels w/ Time",
+       subtitle = "US, 2005 (to forecast)") +
+  geom_line(data = us_gas05_95L, col = "light blue", lty = "dashed") +
+  geom_line(data = us_gas05_80L, col = "dark blue", lty = "dashed") +
+  geom_line(data = us_gas05_point, col = "dark grey", lty = "dashed") +
+  geom_line(data = us_gas05_80U, col = "dark blue", lty = "dashed") +
+  geom_line(data = us_gas05_95U, col = "light blue", lty = "dashed") +
+  theme_bw()
+
+us_gasoline_05A <- 
+  us_gasoline %>%
+  filter(year(Week) == 2005)
+
+Actual_2005 <- us_gasoline_05A$Barrels
+Point_2005 <- us_gas05$Mean
+Point_2005_accuracy <- Point_2005/Actual_2005
+
+print(mean(Point_2005_accuracy))
+
+```
+
+### Question 6
+
+#### Part a
+
+A plot of Afghanistan's population overtime is shown below. The effects of the Soviet-Afghan war can be seen at the point the population line dips between the late-1970's and late-1980's. Aside from the dip during the latter war, the Afghanistan population has been steadily increasing; it appears as though the rates of increase between 1960 and the late-1970's differs from the rate of increase from the late-1980's to the 2010's. 
+
+There does not appear to be strong seasonality or irregularity in the data, aside from the already mentioned Soviet-Afghan war.
+
+```{r, 6a_pop_plot, fig.show = "hold", out.width = "100%", echo = FALSE}
+#QUESTION 6 PART A
+afghan_economy <-
+  global_economy %>%
+    filter(Code == "AFG") %>%
+    mutate(Population = Population/1000000) 
+
+afghan_economy %>%
+  autoplot(Population) +
+  labs(x = "Year",
+       y = "Population (millions)",
+       title = "Population over Time",
+       subtitle = "Afghanistan")
+
+```
+
+#### Part b
+
+The results of a linear and piecewise model are shown below, along with the code generating the models; each are stored in the *afghan_tslm* variable.
+
+The adjusted $R^2$ is strongest in the piecewise model with $99.85%$ of variability in population explained in the model; the same metric for the linear model is less at $83.52%$. Nevertheless, caution should be exercised when working with the piecewise model for forecasting. More data would be required to confirm that the knots chosen truly represent unique moments in the Afghan history. Otherwise, a linear model might be more appropriate.
+
+```{r, 6b_trendmodel, echo = TRUE}
+#QUESTION 6, PART B
+afghan_tslm <-
+  afghan_economy %>%
+  model(linear = TSLM(Population~trend()),
+        piecewise = TSLM(Population~trend(knots = c(1980, 1989))))
+
+afghan_tslm %>%
+  select(linear) %>%
+  report()
+
+afghan_tslm %>%
+  select(piecewise) %>%
+  report()
+
+```
+
+#### Part c
+
+Forecasts of the Afghan population for 5 years from the end of the data (2018-2022), are shown graphically below. With a large adjusted $R^2$, it's no surprise that the piecewise model fits the training data almost perfectly; the linear model does not fit the training data well. Further, the piecewise model gives a forecast in a much narrower range, whereas the linear model suggests a wide range of variability.
+
+With these considerations in mind, it's all but obvious that the piecewise model is preferable for the data available. However, caution should still be practiced. The addition of data from earlier years might diminish the currently obvious rate in population change. That said, Afghanistan has displayed what appears to be an almost constant rate of change since 1989; it's reasonable to expect the trend to continue, at least in the near term.
+
+```{r, 6c_forecast, fig.show = "hold", out.width = "100%", echo = FALSE}
+#QUESTION 6, PART C
+afghan_trend <- 
+  afghan_tslm %>%
+  forecast(h = 5)
+
+afghan_economy %>%
+  autoplot(Population) +
+  geom_line(data = fitted(afghan_tslm),
+            aes(y = .fitted, colour = .model)) +
+  autolayer(afghan_trend, alpha = 0.5, level = 95) +
+  labs(y = "Population",
+       title = "Population",
+       subtitle = "Afghanistan")
+
+```
+
+\newpage
+
+### R Code
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
